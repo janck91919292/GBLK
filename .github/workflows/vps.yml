@@ -1,0 +1,67 @@
+name: Deploy Ngrok VPS
+
+on:
+  workflow_dispatch:
+    inputs:
+      NGROK_API: 
+        required: true 
+      SSH_USERNAME: 
+        required: true 
+      SSH_PASSWORD: 
+        required: true 
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y curl jq openssh-server
+
+    - name: Install Ngrok
+      run: |
+        curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc > /dev/null
+        echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
+        sudo apt-get update && sudo apt-get install -y ngrok
+
+    - name: Start SSH Service
+      run: sudo service ssh start
+
+    - name: Add SSH User
+      env:
+        SSH_USERNAME: ${{ github.event.inputs.SSH_USERNAME }}
+        SSH_PASSWORD: ${{ github.event.inputs.SSH_PASSWORD }}
+      run: |
+        sudo adduser --disabled-password --gecos "" $SSH_USERNAME --force-badname
+        echo "$SSH_USERNAME:$SSH_PASSWORD" | sudo chpasswd
+        sudo usermod -aG sudo $SSH_USERNAME
+
+    - name: Start Ngrok
+      env:
+        NGROK_AUTHTOKEN: ${{ github.event.inputs.NGROK_API }}
+      run: |
+        ngrok authtoken $NGROK_AUTHTOKEN
+        nohup bash -c 'while true; do ngrok tcp 22; sleep 3600; done' &
+
+    - name: Display Ngrok Tunnel Info
+      run: |
+        sleep 10
+        curl --silent --show-error http://127.0.0.1:4040/api/tunnels > tunnels.json
+        export NGROK_URL=$(jq -r '.tunnels[] | select(.proto=="tcp") | .public_url' tunnels.json)
+        NGROK_HOST=$(echo $NGROK_URL | cut -d':' -f2 | cut -c 3-)
+        NGROK_PORT=$(echo $NGROK_URL | cut -d':' -f3)
+        echo "SSH login information:"
+        echo "Username: ${{ github.event.inputs.SSH_USERNAME }}"
+        echo "Password: ${{ github.event.inputs.SSH_PASSWORD }}"
+        echo "Hostname: $NGROK_HOST"
+        echo "Port: $NGROK_PORT"
+
+    - name: Display Connection Instructions
+      run: |
+        echo "Use the above information to connect using PuTTY or any SSH client."
+        sleep infinity
